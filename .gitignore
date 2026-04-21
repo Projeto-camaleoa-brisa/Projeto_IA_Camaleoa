@@ -2,3 +2,4 @@
 static/outputs/*.png
 resultado.png
 __pycache__/
+.idea/
