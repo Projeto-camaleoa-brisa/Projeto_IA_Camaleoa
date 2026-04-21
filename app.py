@@ -1,57 +1,110 @@
-import requests as req
-from flask import Flask, render_template, request, jsonify
+# ================================
+# IMPORTS
+# ================================
+import httpx
+import base64
+from fastapi import FastAPI, UploadFile, File, Form
+from fastapi.responses import JSONResponse
+from dotenv import load_dotenv
+import os
 
-API_KEY = "sk-sam-colega2-Zm6hD1cF5A"
-API_URL = "https://give-bell-republic-responses.trycloudflare.com"
+# ================================
+# CONFIG
+# ================================
+load_dotenv()
 
-app = Flask(__name__)
+API_URL = os.getenv("API_URL")
+API_KEY = os.getenv("API_KEY")
 
+app = FastAPI()
 
-@app.route("/")
-def index():
-    return render_template("index.html")
+print("API_URL carregada:", API_URL)
+print("API_KEY carregada:", API_KEY[:5] + "*****" if API_KEY else None)
 
-
-@app.route("/api/health")
+# ================================
+# ROTAS BÁSICAS
+# ================================
+@app.get("/api/health")
 def health():
+    return {"status": "ok"}
+
+@app.get("/")
+def index():
+    return {"mensagem": "API rodando com Stable Diffusion 🚀"}
+
+# ================================
+# TESTE CONEXÃO COM IA
+# ================================
+@app.get("/health")
+async def health_sd():
     try:
-        r = req.get(f"{API_URL}/health", timeout=10)
-        return jsonify(r.json()), r.status_code
+        async with httpx.AsyncClient(timeout=10) as c:
+            r = await c.get(f"{API_URL}/health")
+        return {"status": "IA conectada", "response": r.status_code}
     except Exception as e:
-        return jsonify({"error": {"message": str(e)}}), 502
+        return JSONResponse(status_code=502, content={"erro": str(e)})
 
-
-@app.route("/api/inpaint", methods=["POST"])
-def inpaint():
+# ================================
+# INPAINT
+# ================================
+@app.post("/api/inpaint")
+async def inpaint(
+    image: UploadFile = File(...),
+    mask: UploadFile = File(...),
+    prompt: str = Form("croche texture"),
+    negative_prompt: str = Form("low quality"),
+    strength: float = Form(0.75),
+    guidance_scale: float = Form(7.5),
+    steps: int = Form(30),
+    seed: int = Form(-1),
+):
     try:
-        image = request.files.get("image")
-        mask = request.files.get("mask")
-        if not image or not mask:
-            return jsonify({"error": {"message": "Falta imagem ou mascara"}}), 400
+        # Ler arquivos
+        img_bytes = await image.read()
+        mask_bytes = await mask.read()
 
-        r = req.post(
-            f"{API_URL}/v1/inpaint",
-            headers={"Authorization": f"Bearer {API_KEY}"},
-            files={
-                "image": (image.filename, image.read(), image.content_type),
-                "mask": (mask.filename, mask.read(), mask.content_type),
-            },
-            data={
-                "prompt": request.form.get("prompt", "red leather"),
-                "negative_prompt": request.form.get("negative_prompt", "blurry, low quality, deformed"),
-                "strength": request.form.get("strength", "0.75"),
-                "guidance_scale": request.form.get("guidance_scale", "7.5"),
-                "steps": request.form.get("steps", "30"),
-                "seed": request.form.get("seed", "-1"),
-            },
-            timeout=180,
-        )
-        return jsonify(r.json()), r.status_code
+        # Requisição para API externa
+        async with httpx.AsyncClient(timeout=180) as c:
+            r = await c.post(
+                url=f"{API_URL}/v1/inpaint",
+                headers={
+                    "Authorization": f"Bearer {API_KEY}"
+                },
+                files={
+                    "image": (image.filename, img_bytes, image.content_type),
+                    "mask": (mask.filename, mask_bytes, mask.content_type),
+                },
+                data={
+                    "prompt": prompt,
+                    "negative_prompt": negative_prompt,
+                    "strength": str(strength),
+                    "guidance_scale": str(guidance_scale),
+                    "steps": str(steps),
+                    "seed": str(seed),
+                },
+            )
+
+        # Processar resposta
+        data = r.json()
+        print("RESPOSTA DA IA:", data)
+
+        # Converter base64 → imagem
+        img_base64 = data["data"]["result_image_base64"]
+        img_bytes = base64.b64decode(img_base64)
+
+        # Salvar imagem
+        with open("../static/outputs/resultado.png", "wb") as f:
+            f.write(img_bytes)
+
+        return {"mensagem": "Imagem salva como resultado.png"}
+
     except Exception as e:
-        return jsonify({"error": {"message": str(e)}}), 502
+        return JSONResponse(status_code=500, content={"erro": str(e)})
 
-
+# ================================
+# EXECUÇÃO
+# ================================
 if __name__ == "__main__":
-    print(f"\n  API remota: {API_URL}")
-    print(f"  Abre: http://localhost:5001\n")
-    app.run(host="0.0.0.0", port=5001)
+    import uvicorn
+    print("\n🚀 API rodando em http://127.0.0.1:8000\n")
+    uvicorn.run(app, host="0.0.0.0", port=8000)
