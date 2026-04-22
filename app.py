@@ -5,6 +5,7 @@ import httpx
 import base64
 from fastapi import FastAPI, UploadFile, File, Form
 from fastapi.responses import JSONResponse
+from fastapi.staticfiles import StaticFiles
 from dotenv import load_dotenv
 import os
 
@@ -17,7 +18,8 @@ API_URL = os.getenv("API_URL")
 API_KEY = os.getenv("API_KEY")
 
 app = FastAPI()
-
+# 🔽 COLE AQUI
+app.mount("/static", StaticFiles(directory="static"), name="static")
 print("API_URL carregada:", API_URL)
 print("API_KEY carregada:", API_KEY[:5] + "*****" if API_KEY else None)
 
@@ -93,7 +95,7 @@ async def inpaint(
         img_bytes = base64.b64decode(img_base64)
 
         # Salvar imagem
-        with open("../static/outputs/resultado.png", "wb") as f:
+        with open("static/outputs/resultado.png", "wb") as f:
             f.write(img_bytes)
 
         return {"mensagem": "Imagem salva como resultado.png"}
