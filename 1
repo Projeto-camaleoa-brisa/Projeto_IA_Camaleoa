@@ -1,0 +1,95 @@
+
+# =========================
+import os
+import base64
+import httpx
+
+from fastapi import FastAPI, UploadFile, File, Form
+from fastapi.responses import JSONResponse
+from fastapi.staticfiles import StaticFiles
+from dotenv import load_dotenv
+
+# =========================
+# CONFIG
+# =========================
+load_dotenv()
+
+API_URL = os.getenv("API_URL")
+API_KEY = os.getenv("API_KEY")
+
+app = FastAPI()
+
+# Servir arquivos estáticos (imagens geradas)
+app.mount("/static", StaticFiles(directory="static"), name="static")
+
+print("API_URL carregada:", API_URL)
+print("API_KEY carregada:", API_KEY[:5] + "*****" if API_KEY else None)
+
+# =========================
+# ROTAS BÁSICAS
+# =========================
+@app.get("/api/health")
+def health():
+    return {"status": "ok"}
+
+@app.get("/")
+def index():
+    return {"mensagem": "API rodando com Stable Diffusion 🚀"}
+
+# =========================
+# INPAINT COM COR DINÂMICA
+# =========================
+@app.post("/api/inpaint")
+async def inpaint(
+    image: UploadFile = File(...),
+    mask: UploadFile = File(...),
+    cor: str = Form(...)  # <- vem do site
+):
+    try:
+        # Ler arquivos enviados
+        img_bytes = await image.read()
+        mask_bytes = await mask.read()
+
+        # =========================
+        # PROMPT (DINÂMICO COM COR)
+        # =========================
+        prompt = f"""
+high quality shoe,
+color {cor},
+uniform material,
+smooth surface,
+consistent texture,
+photorealistic,
+studio lighting
+"""
+
+        negative_prompt = """
+low quality,
+blurry,
+noise,
+uneven texture,
+distorted,
+bad lighting
+"""
+
+        # =========================
+        # REQUISIÇÃO PARA API SD
+        # =========================
+        async with httpx.AsyncClient(timeout=180) as c:
+            r = await c.post(
+                url=f"{API_URL}/v1/inpaint",
+                headers={
+                    "Authorization": f"Bearer {API_KEY}"
+                },
+                files={
+                    "image": (image.filename, img_bytes, image.content_type),
+                    "mask": (mask.filename, mask_bytes, mask.content_type),
+                },
+                data={
+                    "prompt": prompt,
+                    "negative_prompt": negative_prompt,
+                    "strength": 0.45,
+                    "guidance_scale": 7.5,
+                    "steps": 30,
+                    "seed": -1,
+                }
