@@ -1,0 +1,47 @@
+<!DOCTYPE html>
+<html lang="pt-br">
+
+<head>
+    <meta charset="UTF-8">
+    <title>Projeto IA Camaleoa</title>
+</head>
+
+<body>
+
+    <h1>Projeto IA Camaleoa 👠</h1>
+
+    <form action="/api/inpaint" method="post" enctype="multipart/form-data">
+
+        <p>Imagem do sapato:</p>
+        <input type="file" name="image">
+
+        <br><br>
+
+        <p>Máscara:</p>
+        <input type="file" name="mask">
+
+        <br><br>
+<button type="submit" name="prompt"
+value="red velvet high heel shoe, realistic velvet texture, same shoe shape, identical perspective">
+Veludo Vermelho
+</button>
+
+<br><br>
+
+<button type="submit" name="prompt"
+value="blue linen high heel shoe, realistic linen texture, same shoe shape, identical perspective">
+Linho Azul
+</button>
+
+<br><br>
+
+<button type="submit" name="prompt"
+value="crochet floral high heel shoe, handmade crochet texture, same shoe shape, identical perspective">
+Crochê Floral
+</button>
+
+
+    </form>
+
+</body>
+</html>
