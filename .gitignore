@@ -3,3 +3,6 @@ static/outputs/*.png
 static/resultado.png
 __pycache__/
 .idea/
+venv/
+
+*.pyc
