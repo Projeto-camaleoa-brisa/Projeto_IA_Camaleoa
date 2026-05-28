@@ -1,99 +1,185 @@
+import os
+import uuid
 import base64
-import ast
 import httpx
+import io
 
 from dotenv import load_dotenv
 
+from PIL import Image, ImageOps
+
 from fastapi import FastAPI, UploadFile, File, Form
-from fastapi.responses import FileResponse, JSONResponse
+from fastapi.responses import JSONResponse, FileResponse
 from fastapi.staticfiles import StaticFiles
+from fastapi.middleware.cors import CORSMiddleware
+
+# =========================================================
+# CARREGA .ENV
+# =========================================================
 
 load_dotenv()
-# ==================================================
-# CONFIG
-# ==================================================
 
-API_URL = "https://acids-joshua-nathan-terrorists.trycloudflare.com/v1/inpaint"
+# =========================================================
+# URL DA IA
+# =========================================================
+
+API_URL = "https://SEU-LINK.trycloudflare.com"
+
+# =========================================================
+# API KEY
+# =========================================================
 
 API_KEY = os.getenv("API_KEY")
 
-# ==================================================
+# =========================================================
+# PASTA OUTPUTS
+# =========================================================
+
+OUTPUT_DIR = r"C:\IA_OUTPUTS"
+
+os.makedirs(OUTPUT_DIR, exist_ok=True)
+
+# =========================================================
 # FASTAPI
-# ==================================================
+# =========================================================
 
 app = FastAPI()
 
-# ==================================================
+# =========================================================
+# CORS
+# =========================================================
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+# =========================================================
 # STATIC
-# ==================================================
+# =========================================================
 
 app.mount("/static", StaticFiles(directory="static"), name="static")
 
-# ==================================================
+# =========================================================
+# CONFIGURAÇÕES IA
+# =========================================================
+
+TARGET_SIZE = (768, 768)
+
+# =========================================================
+# PREPARAR IMAGEM
+# =========================================================
+
+def preparar_imagem(image_bytes):
+
+    # ABRIR IMAGEM
+    img = Image.open(io.BytesIO(image_bytes))
+
+    # RGB
+    img = img.convert("RGB")
+
+    # RESIZE PROFISSIONAL
+    img = ImageOps.fit(
+        img,
+        TARGET_SIZE,
+        method=Image.LANCZOS
+    )
+
+    # BUFFER
+    buffer = io.BytesIO()
+
+    # SALVAR
+    img.save(
+        buffer,
+        format="PNG",
+        quality=100
+    )
+
+    buffer.seek(0)
+
+    return buffer.getvalue()
+
+# =========================================================
+# PREPARAR MÁSCARA
+# =========================================================
+
+def preparar_mask(mask_bytes):
+
+    # ABRIR
+    mask = Image.open(io.BytesIO(mask_bytes))
+
+    # ESCALA DE CINZA
+    mask = mask.convert("L")
+
+    # RESIZE
+    mask = ImageOps.fit(
+        mask,
+        TARGET_SIZE,
+        method=Image.LANCZOS
+    )
+
+    # BUFFER
+    buffer = io.BytesIO()
+
+    # SALVAR
+    mask.save(
+        buffer,
+        format="PNG"
+    )
+
+    buffer.seek(0)
+
+    return buffer.getvalue()
+
+# =========================================================
 # HOME
-# ==================================================
+# =========================================================
 
 @app.get("/")
 async def home():
 
-    return FileResponse("static/index.html")
+    return {
+        "status": "API ONLINE"
+    }
 
-# ==================================================
+# =========================================================
 # HEALTH
-# ==================================================
+# =========================================================
 
 @app.get("/api/health")
 async def health():
 
-    return {
-        "status": "ok",
-        "api_url": API_URL
-    }
+    try:
 
-# ==================================================
-# FUNÇÃO PROCURA BASE64
-# ==================================================
+        async with httpx.AsyncClient(timeout=30) as client:
 
-def encontrar_base64(obj):
+            response = await client.get(
+                f"{API_URL}/health"
+            )
 
-    # string base64
-    if isinstance(obj, str):
+            return response.json()
 
-        if obj.startswith("iVBOR"):
+    except Exception as e:
 
-            return obj
+        print("\n======================================")
+        print(" ERRO HEALTH ")
+        print("======================================")
 
-        if "base64," in obj:
+        print(str(e))
 
-            return obj.split(",")[1]
+        return JSONResponse(
+            status_code=500,
+            content={
+                "erro": str(e)
+            }
+        )
 
-    # dicionário
-    elif isinstance(obj, dict):
-
-        for valor in obj.values():
-
-            resultado = encontrar_base64(valor)
-
-            if resultado:
-
-                return resultado
-
-    # lista
-    elif isinstance(obj, list):
-
-        for item in obj:
-
-            resultado = encontrar_base64(item)
-
-            if resultado:
-
-                return resultado
-
-    return None
-
-# ==================================================
+# =========================================================
 # INPAINT
-# ==================================================
+# =========================================================
 
 @app.post("/api/inpaint")
 async def inpaint(
@@ -102,258 +188,322 @@ async def inpaint(
 
     mask: UploadFile = File(...),
 
-    prompt: str = Form(
-        default="luxury velvet high heel shoe, realistic velvet texture, premium fashion photography"
-    ),
+    prompt: str = Form(...),
 
     negative_prompt: str = Form(
-        default="blurry, low quality, distorted"
+        default="""
+blurry,
+low quality,
+distorted,
+deformed shoe,
+melted textures,
+duplicated parts,
+extra laces,
+broken sole,
+unrealistic fabric,
+noisy image,
+bad proportions,
+ugly stitching,
+warped sneaker,
+fake crochet texture,
+oversaturated,
+watermark,
+cropped,
+low resolution,
+bad anatomy,
+deformed,
+mutated,
+poor details,
+artifact,
+jpeg artifacts
+"""
     ),
 
-    strength: float = Form(
-        default=0.75
-    ),
+    strength: float = Form(default=0.55),
 
-    guidance_scale: float = Form(
-        default=7.5
-    ),
+    guidance_scale: float = Form(default=7.5),
 
-    steps: int = Form(
-        default=30
-    ),
+    steps: int = Form(default=35),
 
-    seed: int = Form(
-        default=-1
-    )
+    seed: int = Form(default=-1),
+
+    controlnet_scale: float = Form(default=1.0)
 
 ):
 
     try:
 
-        # ==================================================
-        # READ FILES
-        # ==================================================
+        # =================================================
+        # VALIDAR IMAGENS
+        # =================================================
+
+        if not image.content_type.startswith("image/"):
+
+            return JSONResponse(
+                status_code=400,
+                content={
+                    "erro": "Arquivo enviado não é imagem"
+                }
+            )
+
+        if not mask.content_type.startswith("image/"):
+
+            return JSONResponse(
+                status_code=400,
+                content={
+                    "erro": "Máscara enviada não é imagem"
+                }
+            )
+
+        # =================================================
+        # LER ARQUIVOS
+        # =================================================
 
         image_bytes = await image.read()
 
         mask_bytes = await mask.read()
 
-        # ==================================================
-        # SAVE INPUTS
-        # ==================================================
+        # =================================================
+        # PREPROCESSAMENTO IA
+        # =================================================
 
-        with open("imagem.png", "wb") as f:
+        image_bytes = preparar_imagem(image_bytes)
 
-            f.write(image_bytes)
+        mask_bytes = preparar_mask(mask_bytes)
 
-        with open("mask.png", "wb") as f:
-
-            f.write(mask_bytes)
-
-        # ==================================================
-        # HEADERS
-        # ==================================================
-
-        headers = {
-
-            "Authorization": f"Bearer {API_KEY}"
-
-        }
-
-        # ==================================================
-        # FORM DATA
-        # ==================================================
-
-        data = {
-
-            "prompt": prompt,
-
-            "negative_prompt": negative_prompt,
-
-            "strength": str(strength),
-
-            "guidance_scale": str(guidance_scale),
-
-            "steps": str(steps),
-
-            "seed": str(seed)
-
-        }
-
-        # ==================================================
-        # FILES
-        # ==================================================
-
-        files = {
-
-            "image": (
-
-                image.filename,
-
-                image_bytes,
-
-                image.content_type
-
-            ),
-
-            "mask": (
-
-                mask.filename,
-
-                mask_bytes,
-
-                mask.content_type
-
-            )
-
-        }
-
-        # ==================================================
-        # REQUEST
-        # ==================================================
+        # =================================================
+        # ENVIAR PARA IA
+        # =================================================
 
         async with httpx.AsyncClient(timeout=300) as client:
 
             response = await client.post(
 
-                API_URL,
+                f"{API_URL}/v1/inpaint",
 
-                headers=headers,
+                headers={
+                    "Authorization": f"Bearer {API_KEY}"
+                },
 
-                data=data,
+                files={
 
-                files=files
+                    "image": (
+                        "image.png",
+                        image_bytes,
+                        "image/png"
+                    ),
 
+                    "mask": (
+                        "mask.png",
+                        mask_bytes,
+                        "image/png"
+                    ),
+                },
+
+                data={
+
+                    "prompt": prompt,
+
+                    "negative_prompt": negative_prompt,
+
+                    "strength": strength,
+
+                    "guidance_scale": guidance_scale,
+
+                    "steps": steps,
+
+                    "seed": seed,
+
+                    "controlnet_scale": controlnet_scale
+                }
             )
 
-        # ==================================================
-        # DEBUG
-        # ==================================================
+        # =================================================
+        # STATUS
+        # =================================================
 
-        print("\n================ STATUS ================\n")
+        print("\n======================================")
+        print(" STATUS ")
+        print("======================================")
 
         print(response.status_code)
 
-        print("\n================ RESPONSE TEXT ================\n")
-
-        print(response.text)
-
-        # ==================================================
-        # ERROR HTTP
-        # ==================================================
+        # =================================================
+        # VERIFICA ERRO
+        # =================================================
 
         if response.status_code != 200:
 
             return JSONResponse(
-
                 status_code=response.status_code,
-
                 content={
-
-                    "error": response.text
-
+                    "erro": "Erro na IA",
+                    "resposta": response.text
                 }
-
             )
 
-        # ==================================================
-        # PARSE RESPONSE
-        # ==================================================
+        # =================================================
+        # JSON
+        # =================================================
 
-        try:
+        result = response.json()
 
-            result = response.json()
-
-        except:
-
-            result = ast.literal_eval(response.text)
-
-        print("\n================ RESULT ================\n")
+        print("\n======================================")
+        print(" RESPOSTA IA ")
+        print("======================================")
 
         print(result)
 
-        # ==================================================
-        # PROCURA BASE64
-        # ==================================================
+        # =================================================
+        # ENCONTRAR BASE64
+        # =================================================
+
+        def encontrar_base64(obj):
+
+            # STRING
+            if isinstance(obj, str):
+
+                if obj.startswith("iVBOR"):
+                    return obj
+
+                if obj.startswith("/9j/"):
+                    return obj
+
+            # DICIONÁRIO
+            if isinstance(obj, dict):
+
+                for valor in obj.values():
+
+                    resultado = encontrar_base64(valor)
+
+                    if resultado:
+                        return resultado
+
+            # LISTA
+            if isinstance(obj, list):
+
+                for item in obj:
+
+                    resultado = encontrar_base64(item)
+
+                    if resultado:
+                        return resultado
+
+            return None
+
+        # =================================================
+        # BUSCAR IMAGEM
+        # =================================================
 
         img_base64 = encontrar_base64(result)
 
-        # ==================================================
-        # VALIDA
-        # ==================================================
+        # =================================================
+        # NÃO ENCONTROU
+        # =================================================
 
         if not img_base64:
 
             return JSONResponse(
-
                 status_code=500,
-
                 content={
-
-                    "error": "Base64 nao encontrado",
-
-                    "response": str(result)
-
+                    "erro": "Nenhuma imagem encontrada",
+                    "resposta": result
                 }
-
             )
 
-        # ==================================================
-        # DECODE
-        # ==================================================
+        # =================================================
+        # DECODIFICAR IMAGEM
+        # =================================================
 
-        img_bytes = base64.b64decode(img_base64)
+        image_data = base64.b64decode(img_base64)
 
-        # ==================================================
-        # SAVE RESULT
-        # ==================================================
+        # =================================================
+        # NOME ÚNICO
+        # =================================================
 
-        with open("static/resultado.png", "wb") as f:
+        nome_arquivo = f"{uuid.uuid4()}.png"
 
-            f.write(img_bytes)
+        # =================================================
+        # CAMINHO FINAL
+        # =================================================
 
-        print("\n================ IMAGE SAVED ================\n")
+        caminho = os.path.join(
+            OUTPUT_DIR,
+            nome_arquivo
+        )
 
-        # ==================================================
-        # RETURN IMAGE
-        # ==================================================
+        # =================================================
+        # SALVAR IMAGEM
+        # =================================================
 
-        return FileResponse("static/resultado.png")
+        with open(caminho, "wb") as f:
+
+            f.write(image_data)
+
+        # =================================================
+        # ABRIR AUTOMATICAMENTE
+        # =================================================
+
+        os.startfile(caminho)
+
+        print("\n======================================")
+        print(" IMAGEM SALVA ")
+        print("======================================")
+
+        print(caminho)
+
+        # =================================================
+        # RETORNO
+        # =================================================
+
+        return {
+
+            "success": True,
+
+            "arquivo": nome_arquivo,
+
+            "caminho": caminho
+        }
 
     except Exception as e:
 
-        print("\n================ EXCEPTION ================\n")
+        print("\n======================================")
+        print(" ERRO ")
+        print("======================================")
 
         print(str(e))
 
         return JSONResponse(
-
             status_code=500,
-
             content={
-
-                "error": str(e)
-
+                "erro": str(e)
             }
-
         )
 
-# ==================================================
-# RUN
-# ==================================================
+# =========================================================
+# MAIN
+# =========================================================
 
 if __name__ == "__main__":
 
     import uvicorn
 
+    print("\n======================================")
+    print(" FASTAPI INICIADO ")
+    print("======================================")
+
+    print(f"\nAPI REMOTA: {API_URL}")
+
+    print("\nPASTA OUTPUT:")
+    print(OUTPUT_DIR)
+
+    print("\nABRIR:")
+    print("http://127.0.0.1:5001")
+    print("http://127.0.0.1:5001/docs")
+
     uvicorn.run(
-
-        "app:app",
-
+        app,
         host="0.0.0.0",
-
         port=5001,
-
         reload=True
-
     )
